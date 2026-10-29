@@ -13,8 +13,33 @@
 > model *which turn, which character range, and the exact text* — and folds back into a chip
 > inside the sent bubble.
 
+> **官方已有同类功能**：DSH `0.2.2-alpha.2` 起内置「引用文本」——输出是 Markdown `> ` 引用块，
+> 不带出处。本插件多给模型 `turn / range` 出处，入口相同，详见下一节。
+
 > **环境要求**：DSH `>= 0.2.1-rc.3`（依赖该版本的输入框引用胶囊与气泡 `userText` 规则），
 > Node.js `^22.19.0 || >=24.0.0`（随宿主）。
+
+## 与官方功能的关系
+
+DSH **`0.2.2-alpha.2`**（2026-10-28）起，官方已内置引用能力
+（`@deepseek-ai/dsh-message-quotes`）：选中回复里的文字，点选区旁的**引用文本**按钮，内容进入
+输入框，发送后折叠预览。入口与本插件相同，但交给模型的东西不同：
+
+| | 官方（`0.2.2-alpha.2`+） | 本插件 |
+| --- | --- | --- |
+| 送给模型的内容 | 普通 Markdown 引用块，每行一个 `> ` 前缀 | `<citation turn step range anchor session>` + `<quote>` |
+| 出处（第几轮、哪个字符区间） | **没有**——模型只知道「用户引用了一段话」 | 有，可定位到具体轮次与字符区间 |
+| 输入框里的形态 | QuoteNode，文字**可编辑** | 原子胶囊，**不可编辑**，只能整块删除 |
+| 入口 | 选区旁的浮动按钮 | 右键菜单「添加到对话」 |
+
+**怎么选**：只要把一段话引进来 → 用官方，可以直接卸掉本插件；想让模型知道「这段话出自第几轮、
+哪几个字符」→ 用本插件。
+
+**共存保护**：本插件会探测宿主的 `insertQuote` 能力（官方引用正是走它）。一旦发现宿主已经自带
+引用入口，就**不再注入右键菜单项**，把选区右键让回浏览器原生菜单，避免出现两个「引用」。
+所以在 `0.2.2` 之后装它不会打架，只是它会安静下来；`0.2.1` 及更早没有这个能力，功能照常。
+
+下面几节描述的都是**本插件自己**的入口与行为。
 
 ## 它能做什么
 
@@ -163,26 +188,6 @@ dsh plugin remove --profile desktop dsh-citation
 | 同一段已经引用过 | 提示「这一段已经引用过了」 | 避免重复占上下文 |
 | 一条消息已引 5 段 | 提示上限 | 再多就是拿上下文换便利 |
 
-## 与官方功能的关系
-
-DSH **`0.2.2-alpha.2`**（2026-10-28）起，官方已内置引用能力
-（`@deepseek-ai/dsh-message-quotes`）：选中回复里的文字，点选区旁的**引用文本**按钮，内容进入
-输入框，发送后折叠预览。入口与本插件相同，但交给模型的东西不同：
-
-| | 官方（`0.2.2-alpha.2`+） | 本插件 |
-| --- | --- | --- |
-| 送给模型的内容 | 普通 Markdown 引用块，每行一个 `> ` 前缀 | `<citation turn step range anchor session>` + `<quote>` |
-| 出处（第几轮、哪个字符区间） | **没有**——模型只知道「用户引用了一段话」 | 有，可定位到具体轮次与字符区间 |
-| 输入框里的形态 | QuoteNode，文字**可编辑** | 原子胶囊，**不可编辑**，只能整块删除 |
-| 入口 | 选区旁的浮动按钮 | 右键菜单「添加到对话」 |
-
-**怎么选**：只要把一段话引进来 → 用官方，可以直接卸掉本插件；想让模型知道「这段话出自第几轮、
-哪几个字符」→ 用本插件。
-
-**共存保护**：本插件会探测宿主的 `insertQuote` 能力（官方引用正是走它）。一旦发现宿主已经自带
-引用入口，就**不再注入右键菜单项**，把选区右键让回浏览器原生菜单，避免出现两个「引用」。
-所以在 `0.2.2` 之后装它不会打架，只是它会安静下来；`0.2.1` 及更早没有这个能力，功能照常。
-
 ## 兼容性
 
 - 目标版本 **DSH `0.2.1-rc.3`**；在 `0.2.2-alpha.2`（官方已内置引用）上会自动让出右键菜单，
@@ -246,6 +251,10 @@ bubble folds that block back into the same chip.
 
 Requires DSH `>= 0.2.1-rc.3` and Node.js `^22.19.0 || >=24.0.0`. A ready-to-run `client.js` is
 committed, so **GitHub and local installs work today**. This plugin is **not published to npm**.
+
+> **DSH now ships this too.** Since `0.2.2-alpha.2` the host can quote a selection into the composer
+> as a plain Markdown blockquote — no provenance. This plugin adds the `turn / range` provenance,
+> with the same entry point; see *Relationship to the built-in feature* below.
 
 ```bash
 # 1) straight from GitHub (recommended — no build step, the artifact is committed)
