@@ -424,7 +424,17 @@ window.__ModuleLoader__.load({
      * @returns {string} 胶囊 id。
      */
     function citationRefId(citation) {
-      return encodeBase64Url(JSON.stringify(citation))
+      // 固定字段顺序：同一个引用不管是新捕获的还是从协议块解析回来的，id 必须一致，
+      // 否则“重复引用”判定会失灵（JSON.stringify 按插入顺序输出）。
+      const canonical = {
+        turn: citation?.turn ?? 0,
+        step: citation?.step ?? 0,
+        anchor: citation?.anchor ?? '',
+        session: citation?.session ?? '',
+        range: [citation?.range?.[0] ?? 0, citation?.range?.[1] ?? 0],
+        quote: citation?.quote ?? '',
+      }
+      return encodeBase64Url(JSON.stringify(canonical))
     }
 
     /**
@@ -537,6 +547,8 @@ window.__ModuleLoader__.load({
         // span 必须来自 captureInsertion：它带着当前 draftRev，insertReference 会拿它做 CAS。
         const span = capture.call(actions)
         const descriptor = describeCitation(citation, t)
+        // 输入框里的胶囊只暴露文字，先把 "文字 -> 引用" 记下来，悬停才查得到原文。
+        rememberChip(descriptor.label, citation)
         const ref = {
           source: CITATION_SOURCE,
           ref: citationRefId(citation),
@@ -563,6 +575,270 @@ window.__ModuleLoader__.load({
         return { ok: false, reason: 'rejected' }
       } catch (error) {
         return { ok: false, reason: 'error', error }
+      }
+    }
+    //#endregion
+
+    //#region 草稿守卫（回退对话时把协议块还原成胶囊）
+    /** 协议头的前缀，用来一眼认出“这段草稿里还躺着给模型的引用块”。 */
+    const CITATION_HEADER_PREFIX = '我引用了以下'
+
+    /**
+     * 把一段含引用块的草稿重建为「胶囊 + 正文」。
+     * 只在块位于开头时动手（其它情况一律不碰，避免误伤用户手写的文字）。
+     * @param {string} text - 草稿全文（通常是回退对话塞回来的提交原文）。
+     * @param {object} shell - SessionInputShell。
+     * @param {(key: string, vars?: Record<string, unknown>) => string} t - 翻译函数。
+     * @returns {boolean} 是否重建成功。
+     */
+    function rebuildCitationDraft(text, shell, t) {
+      if (typeof text !== 'string' || shell === null || shell === undefined) return false
+      const prefix = splitCitationPrefix(text)
+      if (prefix === null) return false
+      const actions = shell.actions
+      const insertReference = shell.insertReference
+      if (typeof insertReference !== 'function') return false
+      if (typeof actions?.captureInsertion !== 'function') return false
+      const body = text.slice(prefix.length)
+      if (shell.setDraft('') === false) return false
+      for (const item of prefix.items) {
+        const span = actions.captureInsertion()
+        const descriptor = describeCitation(item, t)
+        rememberChip(descriptor.label, item)
+        const ref = {
+          source: CITATION_SOURCE,
+          ref: citationRefId(item),
+          label: descriptor.label,
+          appearance: 'session',
+          clipboardText: citationChipText(item),
+        }
+        if (insertReference.call(shell, ref, span) !== true) return false
+      }
+      if (body !== '') {
+        if (typeof actions.insertText !== 'function') return false
+        if (actions.insertText(body, actions.captureInsertion()) !== true) return false
+      }
+      return true
+    }
+
+    /**
+     * 包住 conversation.input.for(scope) 返回的 shell.setDraft：
+     * dsh-rewind 回退对话时会把“当时发送的原文”整段塞回输入框，而那段文本里带着
+     * 给模型看的引用块。这里在写入之后把它还原成胶囊，用户看到的是折叠态而不是原始标记。
+     * @param {any} ctx - client 根上下文。
+     * @param {(key: string, vars?: Record<string, unknown>) => string} t - 翻译函数。
+     * @returns {() => void} 清理函数。
+     */
+    function installDraftGuard(ctx, t) {
+      const service = ctx.get('conversation')?.input
+      if (service === undefined || service === null || typeof service.for !== 'function') return () => {}
+      const originalFor = service.for
+      const wrapped = new WeakSet()
+      const patchedShells = []
+      let rebuilding = false
+      service.for = function patched(scope) {
+        const shell = originalFor.call(this, scope)
+        if (shell === null || shell === undefined || typeof shell !== 'object') return shell
+        if (wrapped.has(shell)) return shell
+        const originalSetDraft = shell.setDraft
+        if (typeof originalSetDraft !== 'function') return shell
+        wrapped.add(shell)
+        patchedShells.push([shell, originalSetDraft])
+        shell.setDraft = function guardedSetDraft(draft, ...rest) {
+          const result = originalSetDraft.call(this, draft, ...rest)
+          if (rebuilding || typeof draft !== 'string' || !draft.includes(CITATION_HEADER_PREFIX)) {
+            return result
+          }
+          rebuilding = true
+          try {
+            const ok = rebuildCitationDraft(draft, this, t)
+            if (!ok) {
+              // 还原失败就退一步：至少别让原始标记留在输入框里。
+              const prefix = splitCitationPrefix(draft)
+              if (prefix !== null) originalSetDraft.call(this, draft.slice(prefix.length))
+            }
+          } catch (_error) {
+            // 守卫本身绝不能让 setDraft 抛给宿主
+          } finally {
+            rebuilding = false
+          }
+          return result
+        }
+        return shell
+      }
+      return () => {
+        service.for = originalFor
+        for (const [shell, original] of patchedShells.splice(0)) {
+          try {
+            shell.setDraft = original
+          } catch (_error) {
+            // shell 可能已经销毁
+          }
+        }
+      }
+    }
+    //#endregion
+
+    //#region 提示与浮层
+    /** 记住 "胶囊文案 -> 引用" ：输入框里的胶囊只暴露文字，靠它反查原文。 */
+    const chipIndex = new Map()
+
+    /**
+     * 记一条胶囊文案到引用的映射（只保留最近 50 条，够用又不涨内存）。
+     * @param {string} label - 胶囊上显示的文案。
+     * @param {object} citation - 对应引用。
+     */
+    function rememberChip(label, citation) {
+      if (typeof label !== 'string' || label === '') return
+      chipIndex.delete(label)
+      chipIndex.set(label, citation)
+      while (chipIndex.size > 50) {
+        const oldest = chipIndex.keys().next().value
+        chipIndex.delete(oldest)
+      }
+    }
+
+    /**
+     * 按胶囊文案反查引用（输入框里的胶囊 DOM 只带文字，不带 ref）。
+     * @param {string} text - 胶囊元素的可见文字。
+     * @returns {object | null} 命中的引用。
+     */
+    function findChipCitation(text) {
+      if (typeof text !== 'string' || text === '') return null
+      const flat = text.replace(/\s+/gu, '')
+      for (const [label, citation] of chipIndex) {
+        if (flat.includes(label.replace(/\s+/gu, ''))) return citation
+      }
+      return null
+    }
+
+    /**
+     * 底部居中的小提示，2.2 秒自己消失。
+     * 不用宿主 input.notify：那是粘性提示，加完引用会一直挂在输入框上方。
+     * @param {Document} doc - 文档。
+     * @param {string} text - 提示文字。
+     */
+    function showToast(doc, text) {
+      if (doc === null || text === '') return
+      injectStyles(doc)
+      let el = doc.querySelector('.dsh-citation-toast')
+      if (el === null) {
+        el = doc.createElement('div')
+        el.className = 'dsh-citation-toast'
+        el.setAttribute('role', 'status')
+        doc.body.appendChild(el)
+      }
+      el.textContent = text
+      el.dataset.open = 'true'
+      el.__closeAt = Date.now() + 2200
+      const stamp = el.__closeAt
+      if (el.__timer !== undefined) clearTimeout(el.__timer)
+      el.__timer = setTimeout(() => {
+        if (el.__closeAt !== stamp) return
+        el.dataset.open = 'false'
+      }, 2200)
+      // Node（测试）里让计时器不要拖住进程；浏览器里没有 unref。
+      el.__timer?.unref?.()
+    }
+
+    /**
+     * 在某个元素旁边弹出原文浮层（只读、可选中复制）。
+     * @param {Document} doc - 文档。
+     * @param {Element} anchor - 悬停的胶囊元素。
+     * @param {Array<{heading: string, quote: string}>} entries - 展示条目。
+     * @returns {() => void} 关闭函数。
+     */
+    function openQuotePopover(doc, anchor, entries) {
+      if (doc === null || anchor === null || !Array.isArray(entries) || entries.length === 0) return () => {}
+      injectStyles(doc)
+      // 宿主自己也挂了 title，会和我们的浮层一起弹出来：先摘掉，关的时候还回去。
+      const titled = []
+      for (const node of [anchor, ...anchor.querySelectorAll?.('[title]') ?? []]) {
+        const value = node.getAttribute?.('title')
+        if (value !== null && value !== undefined) {
+          titled.push([node, value])
+          node.removeAttribute('title')
+        }
+      }
+      const popover = doc.createElement('div')
+      popover.className = 'dsh-citation-popover'
+      for (const entry of entries) {
+        const head = doc.createElement('span')
+        head.className = 'dsh-citation-popover-head'
+        head.textContent = entry.heading
+        const body = doc.createElement('div')
+        body.textContent = entry.quote
+        popover.append(head, body)
+      }
+      doc.body.appendChild(popover)
+      const rect = anchor.getBoundingClientRect?.() ?? { left: 0, bottom: 0, width: 0, height: 0 }
+      const box = popover.getBoundingClientRect()
+      const view = { width: doc.defaultView?.innerWidth ?? 0, height: doc.defaultView?.innerHeight ?? 0 }
+      const placed = clampMenuPosition({
+        x: rect.left,
+        y: rect.bottom + 6,
+        width: box.width,
+        height: box.height,
+        viewport: view,
+      })
+      popover.style.left = `${placed.left}px`
+      popover.style.top = `${placed.top}px`
+      let closed = false
+      return () => {
+        if (closed) return
+        closed = true
+        popover.remove()
+        for (const [node, value] of titled) {
+          try {
+            node.setAttribute('title', value)
+          } catch (_error) {
+            // 元素可能已经被 React 换掉
+          }
+        }
+      }
+    }
+
+    /**
+     * 输入框里的胶囊悬停显示原文。
+     * 宿主的引用胶囊只暴露 label，所以用 chipIndex 反查（本页插入过的都能查到）。
+     * @param {any} ctx - client 根上下文。
+     * @param {(key: string, vars?: Record<string, unknown>) => string} t - 翻译函数。
+     * @param {{document?: Document}} [options] - 文档覆盖（测试用）。
+     * @returns {() => void} 清理函数。
+     */
+    function installChipHover(ctx, t, options = {}) {
+      const doc = options.document ?? (typeof document === 'undefined' ? null : document)
+      if (doc === null || typeof doc.addEventListener !== 'function') return () => {}
+      let close = null
+      const holderOf = (target) => {
+        try {
+          return target?.closest?.('[data-lexical-decorator="true"]') ?? null
+        } catch (_error) {
+          return null
+        }
+      }
+      const onOver = (event) => {
+        const holder = holderOf(event.target)
+        if (holder === null) return
+        const citation = findChipCitation(String(holder.textContent ?? ''))
+        if (citation === null) return
+        if (close !== null) close()
+        close = openQuotePopover(doc, holder, describeBlock([citation], t).entries)
+      }
+      const onOut = (event) => {
+        if (holderOf(event.target) === null) return
+        if (close !== null) {
+          close()
+          close = null
+        }
+      }
+      doc.addEventListener('pointerover', onOver, true)
+      doc.addEventListener('pointerout', onOut, true)
+      return () => {
+        doc.removeEventListener('pointerover', onOver, true)
+        doc.removeEventListener('pointerout', onOut, true)
+        if (close !== null) close()
+        close = null
       }
     }
     //#endregion
@@ -680,18 +956,9 @@ window.__ModuleLoader__.load({
           return
         }
         const result = insertCitation(ctx, snapshot.citation, { t })
-        const scope = ctx.sessions?.scope?.(snapshot.citation.session)
-        const input = scope === undefined || scope === null ? undefined : ctx.get('conversation')?.input?.for?.(scope)
-        const notify = (level, message) => {
-          try {
-            input?.notify?.(level, message)
-          } catch (_error) {
-            // 通知失败不影响插入结果
-          }
-        }
         if (result.ok === true) {
-          if (result.mode === 'text') notify('info', t('notice.insertDegraded'))
-          else notify('info', t('notice.inserted'))
+          // 自己的小提示，2.2 秒自动消失：宿主 input.notify 是粘性提示，会一直挂在输入框上。
+          showToast(doc, t(result.mode === 'text' ? 'notice.insertDegraded' : 'notice.inserted'))
           try {
             doc.getSelection()?.removeAllRanges?.()
           } catch (_error) {
@@ -701,14 +968,14 @@ window.__ModuleLoader__.load({
           return
         }
         if (result.reason === 'duplicate') {
-          notify('info', t('notice.duplicate'))
+          showToast(doc, t('notice.duplicate'))
           return
         }
         if (result.reason === 'too-many') {
-          notify('error', t('error.tooMany', { max: MAX_CITATIONS }))
+          showToast(doc, t('error.tooMany', { max: MAX_CITATIONS }))
           return
         }
-        notify('error', t('error.insertFailed'))
+        showToast(doc, t('error.insertFailed'))
       }
 
       const openMenu = (snapshot, point) => {
@@ -824,15 +1091,15 @@ window.__ModuleLoader__.load({
     /** 菜单、胶囊、浮层的样式。颜色全部走宿主的主题变量。 */
     const CITATION_CSS = [
       '.dsh-citation-menu{position:fixed;z-index:2147483000;min-width:168px;padding:4px;',
-      'border-radius:10px;border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));',
-      'background:var(--dsw-alias-bg-elevated,#fff);box-shadow:0 8px 28px rgba(0,0,0,.16);',
+      'border-radius:10px;border:1px solid rgba(255,255,255,.14);',
+      'background:#1c1c20;box-shadow:0 12px 34px rgba(0,0,0,.5);color:#f2f2f5;',
       'font-size:13px;display:flex;flex-direction:column;gap:2px}',
       '.dsh-citation-menu-item{appearance:none;border:0;background:transparent;text-align:left;',
-      'padding:7px 10px;border-radius:7px;cursor:pointer;color:var(--dsw-alias-text-primary,inherit);',
+      'padding:7px 10px;border-radius:7px;cursor:pointer;color:#f2f2f5;',
       'font:inherit;line-height:1.3}',
       '.dsh-citation-menu-item:hover,.dsh-citation-menu-item:focus-visible{',
-      'background:var(--dsw-alias-state-business-tertiary,rgba(0,0,0,.06));outline:none}',
-      '.dsh-citation-menu-item[data-action="add"]{color:var(--dsw-alias-state-business-primary,#2f6bff)}',
+      'background:rgba(255,255,255,.1);outline:none}',
+      '.dsh-citation-menu-item[data-action="add"]{color:#7aa2ff}',
       '.dsh-citation-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;',
       'padding:1px 6px;border-radius:6px;cursor:pointer;vertical-align:baseline;',
       'background:var(--dsw-alias-state-business-tertiary,rgba(47,107,255,.1));',
@@ -840,12 +1107,17 @@ window.__ModuleLoader__.load({
       '.dsh-citation-chip[data-open="true"]{outline:1px solid currentColor}',
       '.dsh-citation-popover{position:fixed;z-index:2147483000;max-width:min(560px,86vw);',
       'max-height:40vh;overflow:auto;padding:10px 12px;border-radius:10px;',
-      'border:1px solid var(--dsw-alias-border-secondary,rgba(0,0,0,.12));',
-      'background:var(--dsw-alias-bg-elevated,#fff);box-shadow:0 10px 30px rgba(0,0,0,.18);',
+      'border:1px solid rgba(255,255,255,.14);',
+      'background:#1c1c20;box-shadow:0 14px 36px rgba(0,0,0,.5);color:#f2f2f5;',
       'font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;',
-      'user-select:text;color:var(--dsw-alias-text-primary,inherit)}',
+      'user-select:text}',
       '.dsh-citation-popover-head{display:block;margin-bottom:6px;opacity:.72;font-size:11px}',
-      '.dsh-citation-popover-note{display:block;margin-top:6px;opacity:.72;font-style:italic}',
+      '.dsh-citation-toast{position:fixed;left:50%;transform:translateX(-50%);bottom:104px;',
+      'z-index:2147483000;max-width:70vw;padding:8px 14px;border-radius:999px;',
+      'background:rgba(28,28,32,.96);color:#f2f2f5;font-size:12.5px;line-height:1.4;',
+      'box-shadow:0 10px 28px rgba(0,0,0,.42);pointer-events:none;',
+      'opacity:0;transition:opacity .18s ease}',
+      '.dsh-citation-toast[data-open="true"]{opacity:1}',
     ].join('')
     //#endregion
 
@@ -983,7 +1255,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 气泡里的引用胶囊：默认只是一行短文，悬停才把原文摊开，点一下可以钉住。
+     * 气泡里的引用胶囊：默认只是一行短文，鼠标移上去才把原文摊开。
      * 浮层用原生 DOM 挂到 body 上（不引 react-dom，也不会被气泡的 overflow 裁掉）。
      * @param {object} props - 宿主给的渲染属性（`node` 里带 matcher 产生 data）。
      * @returns {unknown} React 元素。
@@ -994,54 +1266,13 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = React.useState(false)
       const chipRef = React.useRef(null)
       const timerRef = React.useRef(null)
-      const pinnedRef = React.useRef(false)
 
       React.useEffect(() => {
-        if (timerRef.current !== null) clearTimeout(timerRef.current)
         if (!open || entries.length === 0) return undefined
         const chip = chipRef.current
         const doc = chip?.ownerDocument
         if (doc === null || doc === undefined) return undefined
-        const popover = doc.createElement('div')
-        popover.className = 'dsh-citation-popover'
-        for (const entry of entries) {
-          const head = doc.createElement('span')
-          head.className = 'dsh-citation-popover-head'
-          head.textContent = entry.heading
-          const body = doc.createElement('div')
-          body.textContent = entry.quote
-          popover.append(head, body)
-        }
-        doc.body.appendChild(popover)
-        const rect = chip.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 0, height: 0, bottom: 0 }
-        const box = popover.getBoundingClientRect()
-        const view = { width: doc.defaultView?.innerWidth ?? 0, height: doc.defaultView?.innerHeight ?? 0 }
-        const placed = clampMenuPosition({
-          x: rect.left,
-          y: rect.bottom + 6,
-          width: box.width,
-          height: box.height,
-          viewport: view,
-        })
-        popover.style.left = `${placed.left}px`
-        popover.style.top = `${placed.top}px`
-        const onPointerDown = (event) => {
-          if (popover.contains(event.target) || chip.contains(event.target)) return
-          pinnedRef.current = false
-          setOpen(false)
-        }
-        const onKeyDown = (event) => {
-          if (event.key !== 'Escape') return
-          pinnedRef.current = false
-          setOpen(false)
-        }
-        doc.addEventListener('pointerdown', onPointerDown, true)
-        doc.addEventListener('keydown', onKeyDown, true)
-        return () => {
-          doc.removeEventListener('pointerdown', onPointerDown, true)
-          doc.removeEventListener('keydown', onKeyDown, true)
-          popover.remove()
-        }
+        return openQuotePopover(doc, chip, entries)
       }, [open, entries.length])
 
       React.useEffect(
@@ -1051,6 +1282,7 @@ window.__ModuleLoader__.load({
         [],
       )
 
+      // 200ms 开、120ms 关：够稳，不会在从胶囊移到浮层的路上闪掉。
       const schedule = (next) => {
         if (timerRef.current !== null) clearTimeout(timerRef.current)
         timerRef.current = setTimeout(() => setOpen(next), next ? 200 : 120)
@@ -1063,28 +1295,8 @@ window.__ModuleLoader__.load({
           className: 'dsh-citation-chip',
           'data-open': open ? 'true' : 'false',
           title: data.title,
-          role: 'button',
-          tabIndex: 0,
           onPointerEnter: () => schedule(true),
-          onPointerLeave: () => {
-            if (!pinnedRef.current) schedule(false)
-          },
-          onFocus: () => setOpen(true),
-          onBlur: () => {
-            if (!pinnedRef.current) setOpen(false)
-          },
-          onClick: () => {
-            const next = !pinnedRef.current
-            pinnedRef.current = next
-            setOpen(next)
-          },
-          onKeyDown: (event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') return
-            event.preventDefault()
-            const next = !pinnedRef.current
-            pinnedRef.current = next
-            setOpen(next)
-          },
+          onPointerLeave: () => schedule(false),
         },
         data.label ?? '',
       )
@@ -1169,8 +1381,10 @@ window.__ModuleLoader__.load({
         const dispose = locale.register(LOCALE_NS, { zh, en })
         return typeof dispose === 'function' ? dispose : () => {}
       }, 'dsh-citation: 词典')
+      ctx.effect(() => installDraftGuard(ctx, t), 'dsh-citation: 回退守卫')
       ctx.effect(() => registerCitationSource(ctx), 'dsh-citation: 引用源')
       ctx.effect(() => installContextMenu(ctx), 'dsh-citation: 右键菜单')
+      ctx.effect(() => installChipHover(ctx, t), 'dsh-citation: 胶囊悬停原文')
       ctx.effect(() => installUserText(ctx, t), 'dsh-citation: 气泡折叠')
     }
 
@@ -1219,6 +1433,14 @@ window.__ModuleLoader__.load({
       CitationChip,
       installUserText,
       registerCitationSource,
+      showToast,
+      openQuotePopover,
+      installChipHover,
+      rememberChip,
+      findChipCitation,
+      CITATION_CSS,
+      rebuildCitationDraft,
+      installDraftGuard,
     }
     return module.exports
   },
