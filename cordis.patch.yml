@@ -1,0 +1,8 @@
+# Bundle self-activation patch: when this package is installed into a profile
+# via `dsh plugin --profile <name> add link:D:/dsh-ws/dsh-citation`, this patch
+# mounts the host entry `citation` (an empty Cordis plugin — the whole feature
+# lives in the client half, discovered from the `dsh.client` declaration in
+# package.json).
+- insert:
+    - id: citation
+      name: dsh-citation
