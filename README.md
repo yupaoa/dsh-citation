@@ -163,9 +163,30 @@ dsh plugin remove --profile desktop dsh-citation
 | 同一段已经引用过 | 提示「这一段已经引用过了」 | 避免重复占上下文 |
 | 一条消息已引 5 段 | 提示上限 | 再多就是拿上下文换便利 |
 
+## 与官方功能的关系
+
+DSH **`0.2.2-alpha.2`**（2026-10-28）起，官方已内置引用能力
+（`@deepseek-ai/dsh-message-quotes`）：选中回复里的文字，点选区旁的**引用文本**按钮，内容进入
+输入框，发送后折叠预览。入口与本插件相同，但交给模型的东西不同：
+
+| | 官方（`0.2.2-alpha.2`+） | 本插件 |
+| --- | --- | --- |
+| 送给模型的内容 | 普通 Markdown 引用块，每行一个 `> ` 前缀 | `<citation turn step range anchor session>` + `<quote>` |
+| 出处（第几轮、哪个字符区间） | **没有**——模型只知道「用户引用了一段话」 | 有，可定位到具体轮次与字符区间 |
+| 输入框里的形态 | QuoteNode，文字**可编辑** | 原子胶囊，**不可编辑**，只能整块删除 |
+| 入口 | 选区旁的浮动按钮 | 右键菜单「添加到对话」 |
+
+**怎么选**：只要把一段话引进来 → 用官方，可以直接卸掉本插件；想让模型知道「这段话出自第几轮、
+哪几个字符」→ 用本插件。
+
+**共存保护**：本插件会探测宿主的 `insertQuote` 能力（官方引用正是走它）。一旦发现宿主已经自带
+引用入口，就**不再注入右键菜单项**，把选区右键让回浏览器原生菜单，避免出现两个「引用」。
+所以在 `0.2.2` 之后装它不会打架，只是它会安静下来；`0.2.1` 及更早没有这个能力，功能照常。
+
 ## 兼容性
 
-- 目标版本 **DSH `0.2.1-rc.3`**。
+- 目标版本 **DSH `0.2.1-rc.3`**；在 `0.2.2-alpha.2`（官方已内置引用）上会自动让出右键菜单，
+  见上一节。
 - **依赖宿主的内部 DOM 契约**（见「只读的东西」）。这些不是公开 API，宿主大版本升级后可能失效；
   失效时插件会**安静地不再出菜单**，不会崩 UI、不会破坏原生右键菜单。
 - 气泡折叠依赖 `uiConversation.userText` 规则与 `conversation.user.text.node` 槽位；缺这些服务的
@@ -236,6 +257,27 @@ dsh plugin add --profile desktop "link:D:\path\to\dsh-citation"
 
 Fully restart DSH after installing, upgrading or removing the plugin — reloading the page is not
 enough. Uninstall with `dsh plugin remove --profile desktop dsh-citation`.
+
+### Relationship to the built-in feature
+
+DSH **`0.2.2-alpha.2`** (2026-10-28) ships quoting of its own (`@deepseek-ai/dsh-message-quotes`):
+select text in a reply, hit the **Quote text** button next to the selection, and it lands in the
+composer with a folded preview after sending. Same entry point, different payload:
+
+| | Built-in (`0.2.2-alpha.2`+) | This plugin |
+| --- | --- | --- |
+| What the model receives | a plain Markdown blockquote, one `> ` per line | `<citation turn step range anchor session>` + `<quote>` |
+| Provenance (turn, character range) | **none** — the model only knows text was quoted | yes, locates the exact turn and range |
+| In the composer | an editable QuoteNode | an atomic, uneditable chip |
+| Entry point | floating button beside the selection | right-click → *Add to conversation* |
+
+Use the built-in one if all you need is the text; use this plugin if the model should know *which
+turn and which characters* it came from.
+
+**Coexistence.** The plugin probes the host's `insertQuote` capability (which the built-in quote
+path uses). When the host already offers quoting, the plugin **stops injecting its context-menu
+item** and leaves the selection's right-click to the browser, so you never see two quote entries.
+On `0.2.1` and earlier the capability is absent and everything behaves as documented above.
 
 ### What it does
 

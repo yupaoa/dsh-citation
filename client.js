@@ -916,6 +916,27 @@ window.__ModuleLoader__.load({
      * @param {{document?: Document}} [options] - 文档覆盖（测试用）。
      * @returns {() => void} 清理函数。
      */
+    /**
+     * 宿主是否已经自带引用能力。
+     * 从 `0.2.2-alpha.2` 起官方 `@deepseek-ai/dsh-message-quotes` 给输入框加了 `insertQuote`，
+     * 并在选区上注册了自己的引用按钮；此时我们不再插自己的菜单项，免得右键里出现两个“引用”。
+     * 探测失败一律当成“没有”，不要因为别人改版就没收我们的功能。
+     * @param {any} ctx - client 根上下文。
+     * @param {string} sessionId - 选区所在的会话 id。
+     * @returns {boolean} 宿主是否已提供官方引用入口。
+     */
+    function hasOfficialQuote(ctx, sessionId) {
+      try {
+        const input = ctx.get('conversation')?.input
+        const scope = ctx.sessions?.scope?.(sessionId)
+        if (scope === undefined || scope === null || typeof input?.for !== 'function') return false
+        const shell = input.for(scope)
+        return typeof shell?.insertQuote === 'function' || typeof shell?.actions?.insertQuote === 'function'
+      } catch (_error) {
+        return false
+      }
+    }
+
     function installContextMenu(ctx, options = {}) {
       const doc = options.document ?? (typeof document === 'undefined' ? null : document)
       if (doc === null || typeof doc.addEventListener !== 'function') return () => {}
@@ -1057,6 +1078,11 @@ window.__ModuleLoader__.load({
         (event) => {
           const snapshot = captureSelection(doc)
           if (snapshot === null) {
+            close()
+            return
+          }
+          // 官方已有引用入口 -> 让出右键菜单，交回浏览器原生菜单（宿主自己的引用按钮在选区旁）。
+          if (hasOfficialQuote(ctx, snapshot.citation.session)) {
             close()
             return
           }
@@ -1441,6 +1467,7 @@ window.__ModuleLoader__.load({
       CITATION_CSS,
       rebuildCitationDraft,
       installDraftGuard,
+      hasOfficialQuote,
     }
     return module.exports
   },

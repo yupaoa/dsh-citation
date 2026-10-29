@@ -5,6 +5,7 @@
 export function fakeElement(doc, tag) {
   const el = {
     tagName: String(tag).toUpperCase(),
+    nodeType: 1,
     className: '',
     dataset: {},
     style: {},
@@ -15,6 +16,9 @@ export function fakeElement(doc, tag) {
     appendChild(child) {
       el.childNodes.push(child)
       return child
+    },
+    hasAttribute(name) {
+      return el.attributes[name] !== undefined
     },
     append(...kids) {
       for (const kid of kids) el.childNodes.push(kid)
