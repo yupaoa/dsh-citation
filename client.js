@@ -474,6 +474,9 @@ window.__ModuleLoader__.load({
       return {
         trigger: CITATION_TRIGGER,
         name: CITATION_SOURCE,
+        // 宿主的 @ 菜单会对每个 '@' 源无条件调用 candidates()，缺了它会让 @ 提及整块报错。
+        // 引用不需要候选列表（内容来自划选），所以这里回空数组，只占位不出行。
+        candidates: async () => [],
         codec: {
           clipboardText: citationChipText,
           serialize: async (ref) => {
@@ -644,15 +647,20 @@ window.__ModuleLoader__.load({
       const t = translator(ctx)
       let menu = null
       let pending = null
-      const cleanups = []
+      // transient：只属于当前这一次菜单的监听（关菜单就撤）；
+      // permanent：插件级的监听（只有卸载才撤）。两者绝不能混在一个数组里，
+      // 否则第一次关菜单就会把 contextmenu 自己摘掉，菜单从此再也打不开。
+      const transient = []
+      const permanent = []
 
-      const listen = (target, type, handler, opts) => {
+      const track = (bucket, target, type, handler, opts) => {
         target.addEventListener(type, handler, opts)
-        cleanups.push(() => target.removeEventListener(type, handler, opts))
+        bucket.push(() => target.removeEventListener(type, handler, opts))
       }
+      const listen = (target, type, handler, opts) => track(transient, target, type, handler, opts)
 
       const close = () => {
-        for (const dispose of cleanups.splice(0)) dispose()
+        for (const dispose of transient.splice(0)) dispose()
         if (menu !== null) {
           menu.remove()
           menu = null
@@ -749,7 +757,12 @@ window.__ModuleLoader__.load({
         menu.querySelector('.dsh-citation-menu-item')?.focus?.()
 
         listen(doc, 'pointerdown', (event) => {
-          if (menu !== null && event.target instanceof Node && menu.contains(event.target)) return
+          try {
+            // contains() 对非 Node 会抛，正好当成“点在菜单外”。
+            if (menu !== null && typeof menu.contains === 'function' && menu.contains(event.target)) return
+          } catch (_error) {
+            // 落到下面的 close()
+          }
           close()
         }, true)
         listen(doc, 'keydown', (event) => {
@@ -770,7 +783,8 @@ window.__ModuleLoader__.load({
         listen(doc.defaultView ?? doc, 'resize', close, true)
       }
 
-      listen(
+      track(
+        permanent,
         doc,
         'contextmenu',
         (event) => {
@@ -786,7 +800,10 @@ window.__ModuleLoader__.load({
         true,
       )
 
-      return close
+      return () => {
+        close()
+        for (const dispose of permanent.splice(0)) dispose()
+      }
     }
     //#endregion
 

@@ -57,6 +57,9 @@ test('the registered source is a well-formed reference source', async () => {
   const source = createCitationSource()
   assert.equal(source.trigger, '@')
   assert.equal(source.name, 'citation')
+  // 宿主的 @ 菜单对每个 '@' 源无条件调用 candidates()：缺了它整个 @ 提及会报错。
+  assert.equal(typeof source.candidates, 'function')
+  assert.deepEqual(await source.candidates({}, {}), [])
   assert.equal(typeof source.codec.serialize, 'function')
   assert.equal(source.codec.clipboardText(citationRefId(citation())).startsWith('@'), true)
   await assert.doesNotReject(() => source.codec.serialize(citationRefId(citation())))
