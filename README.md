@@ -110,18 +110,15 @@ shell 的 `setDraft`（存下原函数，卸载时逐个还原）。它只在收
 ## 安装
 
 要求：DSH `>= 0.2.1-rc.3`、Node.js `^22.19.0 || >=24.0.0`。`dsh plugin add` 会把参数原样透传给
-`pnpm add`。
+`pnpm add`。本插件**没有发布到 npm**，只有下面两种装法。
 
 ```powershell
-# 1) npm（发布后可用）
-dsh plugin add --profile desktop dsh-citation
-
-# 2) 直接从 GitHub 安装（现在就能用；client.js 已提交，无需构建）
+# 1) 直接从 GitHub 安装（推荐；client.js 已提交，无需构建）
 dsh plugin add --profile desktop "github:yupaoa/dsh-citation"
 #    若上面的 shorthand 不被接受，用等价的显式写法：
 dsh plugin add --profile desktop "git+https://github.com/yupaoa/dsh-citation.git"
 
-# 3) 从本地目录安装（开发 / 离线）
+# 2) 从本地目录安装（开发 / 离线）
 dsh plugin add --profile desktop "link:D:\path\to\dsh-citation"
 ```
 
@@ -144,16 +141,6 @@ dsh plugin add --profile desktop "link:D:\path\to\dsh-citation"
 
 ```powershell
 dsh plugin remove --profile desktop dsh-citation
-```
-
-### 如果刚发布的版本装不上
-
-部分 DSH 版本对 profile 启用了新版本冷却期（`minimumReleaseAge`）：刚发布不久的版本会被拒绝安装。
-等冷却期结束，或把包名加进 profile 的 `pnpm-workspace.yaml`：
-
-```yaml
-minimumReleaseAgeExclude:
-  - dsh-citation
 ```
 
 ## 用
@@ -237,16 +224,13 @@ chip expands into a block carrying the turn, the character range, and the exact 
 bubble folds that block back into the same chip.
 
 Requires DSH `>= 0.2.1-rc.3` and Node.js `^22.19.0 || >=24.0.0`. A ready-to-run `client.js` is
-committed, so **GitHub and local installs work today**.
+committed, so **GitHub and local installs work today**. This plugin is **not published to npm**.
 
 ```bash
-# 1) npm — once published
-dsh plugin add --profile desktop dsh-citation
-
-# 2) straight from GitHub — works today, no build step
+# 1) straight from GitHub (recommended — no build step, the artifact is committed)
 dsh plugin add --profile desktop "github:yupaoa/dsh-citation"
 
-# 3) local directory (development / offline)
+# 2) local directory (development / offline)
 dsh plugin add --profile desktop "link:D:\path\to\dsh-citation"
 ```
 
