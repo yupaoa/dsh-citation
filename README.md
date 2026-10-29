@@ -15,8 +15,6 @@
 
 > **环境要求**：DSH `>= 0.2.1-rc.3`（依赖该版本的输入框引用胶囊与气泡 `userText` 规则），
 > Node.js `^22.19.0 || >=24.0.0`（随宿主）。
-> **发布状态**：仓库里已提交可直接运行的 `client.js`，**GitHub / 本地安装现在就能用**；
-> npm 尚未发布（`dsh plugin add dsh-citation` 要等发布之后，见下方「安装」）。
 
 ## 它能做什么
 
@@ -239,7 +237,7 @@ chip expands into a block carrying the turn, the character range, and the exact 
 bubble folds that block back into the same chip.
 
 Requires DSH `>= 0.2.1-rc.3` and Node.js `^22.19.0 || >=24.0.0`. A ready-to-run `client.js` is
-committed, so **GitHub and local installs work today**; there is no npm release yet.
+committed, so **GitHub and local installs work today**.
 
 ```bash
 # 1) npm — once published
