@@ -48,6 +48,14 @@
     "dsh": ">=0.2.1-rc.3"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yupaoa/dsh-citation.git"
+  },
+  "homepage": "https://github.com/yupaoa/dsh-citation#readme",
+  "bugs": {
+    "url": "https://github.com/yupaoa/dsh-citation/issues"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0"
   }

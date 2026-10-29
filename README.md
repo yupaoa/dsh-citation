@@ -9,17 +9,21 @@
 ## 装
 
 ```powershell
-# 本机开发装法（link 到工作区）
+git clone https://github.com/yupaoa/dsh-citation D:\dsh-ws\dsh-citation
+# 有 dsh CLI：
 dsh plugin --profile desktop add link:D:/dsh-ws/dsh-citation
 ```
 
-没有 `dsh` CLI 时手工装：
+没有 `dsh` CLI 时手工装（路径换成你自己的克隆位置）：
 
-1. `node_modules\dsh-citation` 建一个指向本目录的 Junction（目录符号链接）。
+1. `~/.dsh/profiles/desktop/node_modules\dsh-citation` 建一个指向本目录的 Junction
+   （`cmd /c mklink /J <上面这个路径> D:\dsh-ws\dsh-citation`）。
 2. profile 的 `package.json`：
    - `dependencies` 加 `"dsh-citation": "link:D:/dsh-ws/dsh-citation"`
    - `dsh.profile.bundles` 末尾加 `"dsh-citation"`
 3. 重启 DSH。
+
+> 只支持本地 `link:` 安装，暂未发布到 npm。
 
 ## 用
 
