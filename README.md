@@ -115,7 +115,7 @@ shell 的 `setDraft`（存下原函数，卸载时逐个还原）。它只在收
 `pnpm add`。
 
 ```powershell
-# 1) npm（尚未发布，发布后可用）
+# 1) npm（发布后可用）
 dsh plugin add --profile desktop dsh-citation
 
 # 2) 直接从 GitHub 安装（现在就能用；client.js 已提交，无需构建）
