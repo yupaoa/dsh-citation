@@ -14,10 +14,12 @@
 > inside the sent bubble.
 
 > **官方已有同类功能**：DSH `0.2.2-alpha.2` 起内置「引用文本」——输出是 Markdown `> ` 引用块，
-> 不带出处。本插件多给模型 `turn / range` 出处，入口相同，详见下一节。
+> 不带出处。本插件多给模型 `turn / range` 出处，入口相同，详见[「与官方功能的关系」](#vs-builtin)。
 
 > **环境要求**：DSH `>= 0.2.1-rc.3`（依赖该版本的输入框引用胶囊与气泡 `userText` 规则），
 > Node.js `^22.19.0 || >=24.0.0`（随宿主）。
+
+<a id="vs-builtin"></a>
 
 ## 与官方功能的关系
 
@@ -254,7 +256,8 @@ committed, so **GitHub and local installs work today**. This plugin is **not pub
 
 > **DSH now ships this too.** Since `0.2.2-alpha.2` the host can quote a selection into the composer
 > as a plain Markdown blockquote — no provenance. This plugin adds the `turn / range` provenance,
-> with the same entry point; see *Relationship to the built-in feature* below.
+> with the same entry point; see [Relationship to the built-in
+> feature](#vs-builtin-en) below.
 
 ```bash
 # 1) straight from GitHub (recommended — no build step, the artifact is committed)
@@ -266,6 +269,8 @@ dsh plugin add --profile desktop "link:D:\path\to\dsh-citation"
 
 Fully restart DSH after installing, upgrading or removing the plugin — reloading the page is not
 enough. Uninstall with `dsh plugin remove --profile desktop dsh-citation`.
+
+<a id="vs-builtin-en"></a>
 
 ### Relationship to the built-in feature
 
